@@ -6,9 +6,13 @@
   <title>AU FHIR Test Data Search</title>
   <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/babel-standalone@6.26.0/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.20.0/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/axios@1.4.0/dist/axios.min.js"></script>
+  <script>
+    // Set backend API URL from environment variable or default
+    window.BACKEND_API_URL = window.BACKEND_API_URL || 'http://localhost:3000';
+  </script>
 </head>
 <body>
   <div id="root"></div>
@@ -25,9 +29,15 @@
       const [issueData, setIssueData] = useState({ title: '', description: '', steps: '' });
       const [isLoggedIn, setIsLoggedIn] = useState(false);
 
+      // Check login status
+      useEffect(() => {
+        const token = localStorage.getItem('github_token');
+        if (token) setIsLoggedIn(true);
+      }, []);
+
       // Fetch FHIR resources from backend
       useEffect(() => {
-        axios.get('/api/resources')
+        axios.get(`${window.BACKEND_API_URL}/api/resources`)
           .then(response => {
             setResources(response.data);
             setFilteredResources(response.data);
@@ -47,16 +57,23 @@
 
       // Handle GitHub login
       const handleLogin = () => {
-        window.location.href = '/api/auth/github';
+        window.location.href = `${window.BACKEND_API_URL}/api/auth/github`;
       };
 
       // Handle contribution submission
       const handleContribute = () => {
+        if (!isLoggedIn) {
+          alert('Please log in with GitHub to contribute.');
+          return;
+        }
         try {
           const jsonData = JSON.parse(contributionData);
-          axios.post('/api/contribute', { data: jsonData })
-            .then(response => alert('Contribution submitted! PR created.'))
-            .catch(error => alert('Error submitting contribution: ' + error.message));
+          axios.post(`${window.BACKEND_API_URL}/api/contribute`, { data: jsonData })
+            .then(response => {
+              alert('Contribution submitted! PR created.');
+              setContributionData('');
+            })
+            .catch(error => alert('Error submitting contribution: ' + error.response?.data?.error || error.message));
         } catch (error) {
           alert('Invalid JSON format');
         }
@@ -64,9 +81,20 @@
 
       // Handle issue submission
       const handleSubmitIssue = () => {
-        axios.post('/api/issues', issueData)
-          .then(response => alert('Issue created successfully!'))
-          .catch(error => alert('Error creating issue: ' + error.message));
+        if (!isLoggedIn) {
+          alert('Please log in with GitHub to raise an issue.');
+          return;
+        }
+        if (!issueData.title || !issueData.description) {
+          alert('Title and description are required.');
+          return;
+        }
+        axios.post(`${window.BACKEND_API_URL}/api/issues`, issueData)
+          .then(response => {
+            alert('Issue created successfully!');
+            setIssueData({ title: '', description: '', steps: '' });
+          })
+          .catch(error => alert('Error creating issue: ' + error.response?.data?.error || error.message));
       };
 
       return (
@@ -93,13 +121,15 @@
                 >
                   Raise Issue
                 </button>
-                {!isLoggedIn && (
+                {!isLoggedIn ? (
                   <button
                     onClick={handleLogin}
                     className="bg-white text-blue-600 px-4 py-2 rounded"
                   >
                     Login with GitHub
                   </button>
+                ) : (
+                  <span className="px-4 py-2">Logged In</span>
                 )}
               </div>
             </div>
@@ -133,7 +163,7 @@
                     {selectedResource && (
                       <div className="border rounded p-4 bg-white">
                         <h2 className="text-lg font-semibold mb-2">Resource Details</h2>
-                        <pre className="bg-gray-100 p-2 rounded overflow-auto">
+                        <pre className="bg-gray-100 p-2 rounded overflow-auto max-h-[600px]">
                           {JSON.stringify(selectedResource, null, 2)}
                         </pre>
                       </div>
@@ -148,12 +178,12 @@
                 <textarea
                   value={contributionData}
                   onChange={e => setContributionData(e.target.value)}
-                  placeholder="Paste FHIR JSON here..."
-                  className="w-full h-64 p-2 border rounded mb-4"
+                  placeholder="Paste FHIR JSON here (e.g., { \"resourceType\": \"Patient\", \"id\": \"example\" })"
+                  className="w-full h-64 p-2 border rounded mb-4 font-mono"
                 />
                 <button
                   onClick={handleContribute}
-                  className="bg-blue-600 text-white px-4 py-2 rounded"
+                  className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
                 >
                   Submit Contribution
                 </button>
@@ -176,14 +206,14 @@
                   className="w-full p-2 mb-4 border rounded h-32"
                 />
                 <textarea
-                  placeholder="Steps to Reproduce"
+                  placeholder="Steps to Reproduce (optional)"
                   value={issueData.steps}
                   onChange={e => setIssueData({ ...issueData, steps: e.target.value })}
                   className="w-full p-2 mb-4 border rounded h-32"
                 />
                 <button
                   onClick={handleSubmitIssue}
-                  className="bg-blue-600 text-white px-4 py-2 rounded"
+                  className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
                 >
                   Submit Issue
                 </button>
