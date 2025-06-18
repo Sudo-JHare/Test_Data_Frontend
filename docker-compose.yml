@@ -8,7 +8,8 @@ services:
     environment:
       - BACKEND_API_URL=http://backend:3000
     depends_on:
-      - backend
+      backend:
+        condition: service_started
     networks:
       - app-network
 
@@ -22,6 +23,7 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+    mem_limit: 512m
     networks:
       - app-network
 
