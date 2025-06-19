@@ -11,7 +11,7 @@
   <script src="https://cdn.jsdelivr.net/npm/axios@1.4.0/dist/axios.min.js"></script>
   <script>
     // Set backend API URL from environment variable or default
-    window.BACKEND_API_URL = window.BACKEND_API_URL || 'http://localhost:3000';
+    window.BACKEND_API_URL = window.BACKEND_API_URL || 'http://localhost:3050';
   </script>
 </head>
 <body>
@@ -160,3 +160,88 @@
                       Last Updated: {new Date(lastUpdated).toLocaleString()}
                     </span>
                   )}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <h2 className="text-lg font-semibold mb-2">Resources</h2>
+                    <ul className="border rounded bg-white">
+                      {filteredResources.map(resource => (
+                        <li
+                          key={resource.id}
+                          onClick={() => setSelectedResource(resource)}
+                          className="p-2 hover:bg-gray-200 cursor-pointer"
+                        >
+                          {resource.resourceType} - {resource.id} {resource.code?.coding?.[0]?.display ? `- ${resource.code.coding[0].display}` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    {selectedResource && (
+                      <div className="border rounded p-4 bg-white">
+                        <h2 className="text-lg font-semibold mb-2">Resource Details</h2>
+                        <pre className="bg-gray-100 p-2 rounded overflow-auto max-h-[600px]">
+                          {JSON.stringify(selectedResource, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+            {viewMode === 'contribute' && (
+              <div className="border rounded p-4 bg-white">
+                <h2 className="text-lg font-semibold mb-2">Contribute Test Data</h2>
+                <textarea
+                  value={contributionData}
+                  onChange={e => setContributionData(e.target.value)}
+                  placeholder='Paste FHIR JSON here (e.g., { "resourceType": "AllergyIntolerance", "id": "example", "code": { "coding": [{ "display": "Example" }] } })'
+                  className="w-full h-64 p-2 border rounded mb-4 font-mono"
+                />
+                <button
+                  onClick={handleContribute}
+                  className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                >
+                  Submit Contribution
+                </button>
+              </div>
+            )}
+            {viewMode === 'issue' && (
+              <div className="border rounded p-4 bg-white">
+                <h2 className="text-lg font-semibold mb-2">Raise an Issue</h2>
+                <input
+                  type="text"
+                  placeholder="Issue Title"
+                  value={issueData.title}
+                  onChange={e => setIssueData({ ...issueData, title: e.target.value })}
+                  className="w-full p-2 mb-4 border rounded"
+                />
+                <textarea
+                  placeholder="Description"
+                  value={issueData.description}
+                  onChange={e => setIssueData({ ...issueData, description: e.target.value })}
+                  className="w-full p-2 mb-4 border rounded h-32"
+                />
+                <textarea
+                  placeholder="Steps to Reproduce (optional)"
+                  value={issueData.steps}
+                  onChange={e => setIssueData({ ...issueData, steps: e.target.value })}
+                  className="w-full p-2 mb-4 border rounded h-32"
+                />
+                <button
+                  onClick={handleSubmitIssue}
+                  className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                >
+                  Submit Issue
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    };
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>
