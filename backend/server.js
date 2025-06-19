@@ -1,23 +1,30 @@
 const express = require('express');
-const { Octokit } = require('@octokit/rest');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const fs = require('fs').promises;
+const path = require('path');
 const axios = require('axios');
+const unzipper = require('unzipper');
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Environment variables
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
-const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
-const REPO_OWNER = 'Sudo-JHare'; // Updated to your repository
-const REPO_NAME = 'au-fhir-test-data';
-const REDIRECT_URI = 'http://localhost:3000/api/auth/github/callback';
-
-const octokit = new Octokit({ auth: GITHUB_TOKEN });
+// Commented out GitHub dependencies
+// const { Octokit } = require('@octokit/rest');
+// const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+// const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
+// const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
+// const REPO_OWNER = 'Sudo-JHare';
+// const REPO_NAME = 'au-fhir-test-data';
+// const REDIRECT_URI = 'http://localhost:3000/api/auth/github/callback';
+// const octokit = new Octokit({ auth: GITHUB_TOKEN });
 
 app.use(cors());
 app.use(bodyParser.json());
+
+// Paths for local data
+const DATA_DIR = path.join(__dirname, 'data', 'au-fhir-test-data-set');
+const LAST_UPDATED_FILE = path.join(__dirname, 'data', 'last_updated.json');
+const ISSUES_FILE = path.join(__dirname, 'data', 'issues.json');
 
 // Simple FHIR validation (replace with hapi-fhir for production)
 const validateFhir = (data) => {
@@ -27,99 +34,268 @@ const validateFhir = (data) => {
   return { valid: true };
 };
 
-// Fetch FHIR resources from GitHub
+// Fetch FHIR resources from local directory
 app.get('/api/resources', async (req, res) => {
   try {
-    console.log(`Fetching contents of test-data directory from ${REPO_OWNER}/${REPO_NAME}...`);
-    const { data } = await octokit.repos.getContent({
-      owner: REPO_OWNER,
-      repo: REPO_NAME,
-      path: 'test-data',
-    });
-    console.log('Directory contents:', data);
-
+    console.log(`Reading FHIR resources from ${DATA_DIR}...`);
     const resources = [];
-    // Handle both files and directories
-    for (const item of data) {
-      if (item.type === 'file' && item.name.endsWith('.json')) {
-        console.log('Fetching file:', item.path);
-        const { data: fileContent } = await octokit.repos.getContent({
-          owner: REPO_OWNER,
-          repo: REPO_NAME,
-          path: item.path,
-        });
-        const content = Buffer.from(fileContent.content, 'base64').toString();
+    
+    // Read files directly in au-fhir-test-data-set
+    const items = await fs.readdir(DATA_DIR, { withFileTypes: true });
+    for (const item of items) {
+      if (item.isFile() && item.name.endsWith('.json')) {
+        const fullPath = path.join(DATA_DIR, item.name);
+        console.log('Reading file:', fullPath);
         try {
+          const content = await fs.readFile(fullPath, 'utf8');
           resources.push(JSON.parse(content));
         } catch (parseError) {
-          console.error(`Error parsing JSON file ${item.path}:`, parseError);
-        }
-      } else if (item.type === 'dir') {
-        console.log('Processing directory:', item.path);
-        const { data: files } = await octokit.repos.getContent({
-          owner: REPO_OWNER,
-          repo: REPO_NAME,
-          path: item.path,
-        });
-        console.log(`Files in ${item.path}:`, files);
-        for (const file of files) {
-          if (file.name.endsWith('.json')) {
-            console.log('Fetching file:', file.path);
-            const { data: fileContent } = await octokit.repos.getContent({
-              owner: REPO_OWNER,
-              repo: REPO_NAME,
-              path: file.path,
-            });
-            const content = Buffer.from(fileContent.content, 'base64').toString();
-            try {
-              resources.push(JSON.parse(content));
-            } catch (parseError) {
-              console.error(`Error parsing JSON file ${file.path}:`, parseError);
-            }
-          }
+          console.error(`Error parsing JSON file ${fullPath}:`, parseError);
         }
       }
     }
-    console.log('Final resources:', resources);
+    
+    console.log('Final resources:', JSON.stringify(resources, null, 2));
     res.json(resources);
   } catch (error) {
-    console.error('Error fetching resources:', error);
-    res.status(500).json({ error: 'Failed to fetch resources' });
-  }
-});
-
-// Initiate GitHub OAuth
-app.get('/api/auth/github', (req, res) => {
-  const url = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${REDIRECT_URI}&scope=repo`;
-  res.redirect(url);
-});
-
-// Handle GitHub OAuth callback
-app.get('/api/auth/github/callback', async (req, res) => {
-  const { code } = req.query;
-  try {
-    const response = await axios.post('https://github.com/login/oauth/access_token', {
-      client_id: GITHUB_CLIENT_ID,
-      client_secret: GITHUB_CLIENT_SECRET,
-      code,
-      redirect_uri: REDIRECT_URI,
-    }, {
-      headers: { Accept: 'application/json' },
+    console.error('Error fetching resources:', {
+      message: error.message,
+      stack: error.stack,
     });
-    const token = response.data.access_token;
-    res.send(`
-      <script>
-        localStorage.setItem('github_token', '${token}');
-        window.location.href = '/';
-      </script>
-    `);
-  } catch (error) {
-    console.error('OAuth error:', error);
-    res.status(500).send('Authentication failed');
+    res.status(500).json({ error: 'Failed to fetch resources', details: error.message });
   }
 });
 
-// Handle contribution
+// Refresh local test data from GitHub repository
+app.get('/api/refresh', async (req, res) => {
+  try {
+    console.log('Refreshing test data from Sudo-JHare/au-fhir-test-data...');
+    const repoUrl = 'https://github.com/Sudo-JHare/au-fhir-test-data/archive/refs/heads/main.zip';
+    const response = await axios.get(repoUrl, { responseType: 'stream' });
+    
+    // Create temporary directory
+    const tempDir = path.join(__dirname, 'data', 'temp');
+    await fs.mkdir(tempDir, { recursive: true });
+    
+    // Save ZIP
+    const zipPath = path.join(tempDir, 'repo.zip');
+    const writeStream = fs.createWriteStream(zipPath);
+    response.data.pipe(writeStream);
+    
+    await new Promise((resolve, reject) => {
+      writeStream.on('finish', resolve);
+      writeStream.on('error', reject);
+    });
+    
+    // Unzip and move au-fhir-test-data-set
+    await fs.rm(DATA_DIR, { recursive: true, force: true });
+    await fs.mkdir(DATA_DIR, { recursive: true });
+    await new Promise((resolve, reject) => {
+      fs.createReadStream(zipPath)
+        .pipe(unzipper.Extract({ path: tempDir }))
+        .on('close', resolve)
+        .on('error', reject);
+    });
+    
+    // Move au-fhir-test-data-set contents
+    const extractedDir = path.join(tempDir, 'au-fhir-test-data-main', 'au-fhir-test-data-set');
+    const files = await fs.readdir(extractedDir, { withFileTypes: true });
+    for (const file of files) {
+      if (file.isFile()) {
+        await fs.rename(
+          path.join(extractedDir, file.name),
+          path.join(DATA_DIR, file.name)
+        );
+      }
+    }
+    
+    // Clean up
+    await fs.rm(tempDir, { recursive: true, force: true });
+    
+    // Update timestamp
+    const timestamp = new Date().toISOString();
+    await fs.writeFile(LAST_UPDATED_FILE, JSON.stringify({ lastUpdated: timestamp }));
+    console.log(`Data refreshed at ${timestamp}`);
+    
+    res.json({ message: 'Test data refreshed successfully', timestamp });
+  } catch (error) {
+    console.error('Error refreshing test data:', {
+      message: error.message,
+      stack: error.stack,
+    });
+    res.status(500).json({ error: 'Failed to refresh test data', details: error.message });
+  }
+});
+
+// Get last updated timestamp
+app.get('/api/last-updated', async (req, res) => {
+  try {
+    const content = await fs.readFile(LAST_UPDATED_FILE, 'utf8');
+    const { lastUpdated } = JSON.parse(content);
+    res.json({ lastUpdated });
+  } catch (error) {
+    console.error('Error reading last updated timestamp:', errorANSWER: The provided sample `AllergyIntolerance` resource indicates that the FHIR JSON files in `Sudo-JHare/au-fhir-test-data` are stored directly in the `au-fhir-test-data-set` folder without subfolders, and we need to parse and display key fields like `resourceType`, `id`, and `code.coding[0].display`. The current issue is that no searchable data appears in the frontend at `http://localhost:8080`, likely because the backend’s `/api/resources` endpoint in `backend/server.js` (artifact_id: `d4d5d654-31c4-403f-a061-b6ef7efc1810`) is not correctly handling files in `au-fhir-test-data-set` or the local data directory is empty. The previous network error (`net::ERR_NAME_NOT_RESOLVED`) was addressed by switching to local data, and your request is to comment out all GitHub and OAuth code, use a local copy of the repository, add a refresh function, and store a timestamp.
+
+I’ll update the application to:
+1. Comment out GitHub API and OAuth code in `backend/server.js` (already done, but I’ll ensure it’s consistent).
+2. Process `.json` files directly in `backend/data/au-fhir-test-data-set` without expecting subfolders.
+3. Retain the `/api/refresh` endpoint to download `Sudo-JHare/au-fhir-test-data` and extract `au-fhir-test-data-set`.
+4. Store the last update timestamp in `backend/data/last_updated.json`.
+5. Update the frontend to display `resourceType`, `id`, and `code.coding[0].display` (e.g., “AllergyIntolerance - lactose - Intolerance to lactose”) for better usability, mimicking cdasearch.hl7.org.
+6. Include a sample `lactose.json` file based on your example.
+7. Ensure the Docker setup persists data and resolves the network issue.
+
+### Updated Artifacts
+We need to update:
+- `backend/server.js`: Simplify `/api/resources` for root-level files, retain refresh and local storage.
+- `frontend/index.html`: Enhance display with `code.coding[0].display` and add refresh/timestamp UI.
+- `docker-compose.yml`, `backend/Dockerfile`, `backend/package.json`: Already correct, included for completeness.
+- Provide `backend/data/au-fhir-test-data-set/lactose.json` and `last_updated.json`.
+
+#### Updated `backend/server.js`
+<xaiArtifact artifact_id="d4d5d654-31c4-403f-a061-b6ef7efc1810" artifact_version_id="7fc3ea91-7712-43af-979d-0ef0e28d8fbe" title="backend/server.js" contentType="text/javascript">
+const express = require('express');
+const cors = require('cors');
+const bodyParser = require('body-parser');
+const fs = require('fs').promises;
+const path = require('path');
+const axios = require('axios');
+const unzipper = require('unzipper');
+const app = express();
+const port = process.env.PORT || 3000;
+
+// Commented out GitHub dependencies
+// const { Octokit } = require('@octokit/rest');
+// const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+// const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
+// const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
+// const REPO_OWNER = 'Sudo-JHare';
+// const REPO_NAME = 'au-fhir-test-data';
+// const REDIRECT_URI = 'http://localhost:3000/api/auth/github/callback';
+// const octokit = new Octokit({ auth: GITHUB_TOKEN });
+
+app.use(cors());
+app.use(bodyParser.json());
+
+// Paths for local data
+const DATA_DIR = path.join(__dirname, 'data', 'au-fhir-test-data-set');
+const LAST_UPDATED_FILE = path.join(__dirname, 'data', 'last_updated.json');
+const ISSUES_FILE = path.join(__dirname, 'data', 'issues.json');
+
+// Simple FHIR validation (replace with hapi-fhir for production)
+const validateFhir = (data) => {
+  if (!data.resourceType || !data.id) {
+    return { valid: false, error: 'resourceType and id are required' };
+  }
+  return { valid: true };
+};
+
+// Fetch FHIR resources from local directory
+app.get('/api/resources', async (req, res) => {
+  try {
+    console.log(`Reading FHIR resources from ${DATA_DIR}...`);
+    const resources = [];
+    
+    // Read files directly in au-fhir-test-data-set
+    const items = await fs.readdir(DATA_DIR, { withFileTypes: true });
+    for (const item of items) {
+      if (item.isFile() && item.name.endsWith('.json')) {
+        const fullPath = path.join(DATA_DIR, item.name);
+        console.log('Reading file:', fullPath);
+        try {
+          const content = await fs.readFile(fullPath, 'utf8');
+          resources.push(JSON.parse(content));
+        } catch (parseError) {
+          console.error(`Error parsing JSON file ${fullPath}:`, parseError);
+        }
+      }
+    }
+    
+    console.log('Final resources:', JSON.stringify(resources, null, 2));
+    res.json(resources);
+  } catch (error) {
+    console.error('Error fetching resources:', {
+      message: error.message,
+      stack: error.stack,
+    });
+    res.status(500).json({ error: 'Failed to fetch resources', details: error.message });
+  }
+});
+
+// Refresh local test data from GitHub repository
+app.get('/api/refresh', async (req, res) => {
+  try {
+    console.log('Refreshing test data from Sudo-JHare/au-fhir-test-data...');
+    const repoUrl = 'https://github.com/Sudo-JHare/au-fhir-test-data/archive/refs/heads/main.zip';
+    const response = await axios.get(repoUrl, { responseType: 'stream' });
+    
+    // Create temporary directory
+    const tempDir = path.join(__dirname, 'data', 'temp');
+    await fs.mkdir(tempDir, { recursive: true });
+    
+    // Save ZIP
+    const zipPath = path.join(tempDir, 'repo.zip');
+    const writeStream = fs.createWriteStream(zipPath);
+    response.data.pipe(writeStream);
+    
+    await new Promise((resolve, reject) => {
+      writeStream.on('finish', resolve);
+      writeStream.on('error', reject);
+    });
+    
+    // Unzip and move au-fhir-test-data-set
+    await fs.rm(DATA_DIR, { recursive: true, force: true });
+    await fs.mkdir(DATA_DIR, { recursive: true });
+    await new Promise((resolve, reject) => {
+      fs.createReadStream(zipPath)
+        .pipe(unzipper.Extract({ path: tempDir }))
+        .on('close', resolve)
+        .on('error', reject);
+    });
+    
+    // Move au-fhir-test-data-set contents
+    const extractedDir = path.join(tempDir, 'au-fhir-test-data-main', 'au-fhir-test-data-set');
+    const files = await fs.readdir(extractedDir, { withFileTypes: true });
+    for (const file of files) {
+      if (file.isFile()) {
+        await fs.rename(
+          path.join(extractedDir, file.name),
+          path.join(DATA_DIR, file.name)
+        );
+      }
+    }
+    
+    // Clean up
+    await fs.rm(tempDir, { recursive: true, force: true });
+    
+    // Update timestamp
+    const timestamp = new Date().toISOString();
+    await fs.writeFile(LAST_UPDATED_FILE, JSON.stringify({ lastUpdated: timestamp }));
+    console.log(`Data refreshed at ${timestamp}`);
+    
+    res.json({ message: 'Test data refreshed successfully', timestamp });
+  } catch (error) {
+    console.error('Error refreshing test data:', {
+      message: error.message,
+      stack: error.stack,
+    });
+    res.status(500).json({ error: 'Failed to refresh test data', details: error.message });
+  }
+});
+
+// Get last updated timestamp
+app.get('/api/last-updated', async (req, res) => {
+  try {
+    const content = await fs.readFile(LAST_UPDATED_FILE, 'utf8');
+    const { lastUpdated } = JSON.parse(content);
+    res.json({ lastUpdated });
+  } catch (error) {
+    console.error('Error reading last updated timestamp:', error);
+    res.status(404).json({ error: 'Timestamp not found' });
+  }
+});
+
+// Handle contribution (store locally)
 app.post('/api/contribute', async (req, res) => {
   const { data } = req.body;
   const validation = validateFhir(data);
@@ -128,53 +304,19 @@ app.post('/api/contribute', async (req, res) => {
   }
 
   try {
-    const issue = await octokit.issues.create({
-      owner: REPO_OWNER,
-      repo: REPO_NAME,
-      title: `New FHIR Test Data: ${data.resourceType}/${data.id}`,
-      body: 'New test data submitted via AU FHIR Search app.',
-    });
-
-    const { data: ref } = await octokit.git.getRef({
-      owner: REPO_OWNER,
-      repo: REPO_NAME,
-      ref: 'heads/main',
-    });
-
-    const branchName = `issue-${issue.data.number}-${data.resourceType.toLowerCase()}-${data.id.toLowerCase()}`;
-    await octokit.git.createRef({
-      owner: REPO_OWNER,
-      repo: REPO_NAME,
-      ref: `refs/heads/${branchName}`,
-      sha: ref.object.sha,
-    });
-
-    await octokit.repos.createOrUpdateFileContents({
-      owner: REPO_OWNER,
-      repo: REPO_NAME,
-      path: `test-data/${data.resourceType}/${data.id}.json`,
-      message: `Add ${data.resourceType}/${data.id} for issue #${issue.data.number}`,
-      content: Buffer.from(JSON.stringify(data, null, 2)).toString('base64'),
-      branch: branchName,
-    });
-
-    await octokit.pulls.create({
-      owner: REPO_OWNER,
-      repo: REPO_NAME,
-      title: `Add ${data.resourceType}/${data.id} for issue #${issue.data.number}`,
-      head: branchName,
-      base: 'main',
-      body: `Closes #${issue.data.number}\n\nNew FHIR test data submitted via web app.`,
-    });
-
-    res.json({ message: 'Contribution submitted successfully' });
+    // Store in au-fhir-test-data-set/<resourceType>/<id>.json for future compatibility
+    const filePath = path.join(DATA_DIR, data.resourceType, `${data.id}.json`);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify(data, null, 2));
+    console.log(`Saved contribution: ${filePath}`);
+    res.json({ message: 'Contribution saved successfully' });
   } catch (error) {
     console.error('Contribution error:', error);
-    res.status(500).json({ error: 'Failed to submit contribution' });
+    res.status(500).json({ error: 'Failed to save contribution' });
   }
 });
 
-// Handle issue creation
+// Handle issue creation (store locally)
 app.post('/api/issues', async (req, res) => {
   const { title, description, steps } = req.body;
   if (!title || !description) {
@@ -182,18 +324,54 @@ app.post('/api/issues', async (req, res) => {
   }
 
   try {
-    await octokit.issues.create({
-      owner: REPO_OWNER,
-      repo: REPO_NAME,
-      title,
-      body: `**Description**:\n${description}\n\n**Steps to Reproduce**:\n${steps || 'N/A'}`,
-    });
-    res.json({ message: 'Issue created successfully' });
+    const issue = { title, description, steps: steps || 'N/A', timestamp: new Date().toISOString() };
+    let issues = [];
+    try {
+      const content = await fs.readFile(ISSUES_FILE, 'utf8');
+      issues = JSON.parse(content);
+      if (!Array.isArray(issues)) issues = [];
+    } catch (error) {
+      // File doesn't exist yet
+    }
+    issues.push(issue);
+    await fs.writeFile(ISSUES_FILE, JSON.stringify(issues, null, 2));
+    console.log('Issue saved:', issue);
+    res.json({ message: 'Issue saved successfully' });
   } catch (error) {
     console.error('Issue creation error:', error);
-    res.status(500).json({ error: 'Failed to create issue' });
+    res.status(500).json({ error: 'Failed to save issue' });
   }
 });
+
+// Commented out GitHub OAuth endpoints
+// app.get('/api/auth/github', (req, res) => {
+//   const url = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${REDIRECT_URI}&scope=repo`;
+//   res.redirect(url);
+// });
+
+// app.get('/api/auth/github/callback', async (req, res) => {
+//   const { code } = req.query;
+//   try {
+//     const response = await axios.post('https://github.com/login/oauth/access_token', {
+//       client_id: GITHUB_CLIENT_ID,
+//       client_secret: GITHUB_CLIENT_SECRET,
+//       code,
+//       redirect_uri: REDIRECT_URI,
+//     }, {
+//       headers: { Accept: 'application/json' },
+//     });
+//     const token = response.data.access_token;
+//     res.send(`
+//       <script>
+//         localStorage.setItem('github_token', '${token}');
+//         window.location.href = '/';
+//       </script>
+//     `);
+//   } catch (error) {
+//     console.error('OAuth error:', error);
+//     res.status(500).send('Authentication failed');
+//   }
+// });
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
