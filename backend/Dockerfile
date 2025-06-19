@@ -8,6 +8,12 @@ WORKDIR /app
 COPY package.json .
 RUN npm install
 
+# Create data directory
+RUN mkdir -p data/au-fhir-test-data-set
+
+# Copy initial data (optional, can be populated by /api/refresh)
+COPY data/au-fhir-test-data-set ./data/au-fhir-test-data-set
+
 # Copy server.js
 COPY server.js .
 
