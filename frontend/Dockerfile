@@ -16,5 +16,5 @@ COPY index.html /usr/share/nginx/html/
 # Substitute environment variables and start Nginx
 CMD ["/bin/sh", "-c", "envsubst '${BACKEND_API_URL}' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]
 
-# Expose port 80
-EXPOSE 80
+# Expose port 5016
+EXPOSE 5016
