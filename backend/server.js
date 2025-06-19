@@ -10,7 +10,7 @@ const port = process.env.PORT || 3000;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
-const REPO_OWNER = 'hl7au';
+const REPO_OWNER = 'Sudo-JHare';
 const REPO_NAME = 'au-fhir-test-data';
 const REDIRECT_URI = 'http://localhost:3000/api/auth/github/callback';
 
@@ -33,7 +33,7 @@ app.get('/api/resources', async (req, res) => {
     const { data } = await octokit.repos.getContent({
       owner: REPO_OWNER,
       repo: REPO_NAME,
-      path: 'resources',
+      path: 'au-fhir-test-data-set',
     });
 
     const resources = [];
