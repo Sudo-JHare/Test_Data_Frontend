@@ -27,12 +27,14 @@
       const [viewMode, setViewMode] = useState('search'); // search, contribute, issue
       const [contributionData, setContributionData] = useState('');
       const [issueData, setIssueData] = useState({ title: '', description: '', steps: '' });
-      const [isLoggedIn, setIsLoggedIn] = useState(false);
+      const [isLoggedIn, setIsLoggedIn] = useState(true); // Bypassed login for local mode
+      const [lastUpdated, setLastUpdated] = useState('');
 
-      // Check login status
+      // Fetch last updated timestamp
       useEffect(() => {
-        const token = localStorage.getItem('github_token');
-        if (token) setIsLoggedIn(true);
+        axios.get(`${window.BACKEND_API_URL}/api/last-updated`)
+          .then(response => setLastUpdated(response.data.lastUpdated))
+          .catch(error => console.error('Error fetching last updated:', error));
       }, []);
 
       // Fetch FHIR resources from backend
@@ -50,30 +52,46 @@
         const filtered = resources.filter(resource =>
           resource.resourceType.toLowerCase().includes(searchTerm.toLowerCase()) ||
           (resource.id && resource.id.toLowerCase().includes(searchTerm.toLowerCase())) ||
-          (resource.meta?.profile && resource.meta.profile.some(p => p.toLowerCase().includes(searchTerm.toLowerCase())))
+          (resource.meta?.profile && resource.meta.profile.some(p => p.toLowerCase().includes(searchTerm.toLowerCase()))) ||
+          (resource.code?.coding && resource.code.coding.some(c => c.display && c.display.toLowerCase().includes(searchTerm.toLowerCase())))
         );
         setFilteredResources(filtered);
       }, [searchTerm, resources]);
 
-      // Handle GitHub login
-      const handleLogin = () => {
-        window.location.href = `${window.BACKEND_API_URL}/api/auth/github`;
+      // Handle refresh
+      const handleRefresh = () => {
+        axios.get(`${window.BACKEND_API_URL}/api/refresh`)
+          .then(response => {
+            alert('Data refreshed successfully!');
+            setLastUpdated(response.data.timestamp);
+            // Reload resources
+            axios.get(`${window.BACKEND_API_URL}/api/resources`)
+              .then(response => {
+                setResources(response.data);
+                setFilteredResources(response.data);
+              })
+              .catch(error => console.error('Error reloading resources:', error));
+          })
+          .catch(error => alert('Error refreshing data: ' + error.response?.data?.error || error.message));
       };
 
       // Handle contribution submission
       const handleContribute = () => {
-        if (!isLoggedIn) {
-          alert('Please log in with GitHub to contribute.');
-          return;
-        }
         try {
           const jsonData = JSON.parse(contributionData);
           axios.post(`${window.BACKEND_API_URL}/api/contribute`, { data: jsonData })
             .then(response => {
-              alert('Contribution submitted! PR created.');
+              alert('Contribution saved successfully!');
               setContributionData('');
+              // Reload resources
+              axios.get(`${window.BACKEND_API_URL}/api/resources`)
+                .then(response => {
+                  setResources(response.data);
+                  setFilteredResources(response.data);
+                })
+                .catch(error => console.error('Error reloading resources:', error));
             })
-            .catch(error => alert('Error submitting contribution: ' + error.response?.data?.error || error.message));
+            .catch(error => alert('Error saving contribution: ' + error.response?.data?.error || error.message));
         } catch (error) {
           alert('Invalid JSON format');
         }
@@ -81,20 +99,16 @@
 
       // Handle issue submission
       const handleSubmitIssue = () => {
-        if (!isLoggedIn) {
-          alert('Please log in with GitHub to raise an issue.');
-          return;
-        }
         if (!issueData.title || !issueData.description) {
           alert('Title and description are required.');
           return;
         }
         axios.post(`${window.BACKEND_API_URL}/api/issues`, issueData)
           .then(response => {
-            alert('Issue created successfully!');
+            alert('Issue saved successfully!');
             setIssueData({ title: '', description: '', steps: '' });
           })
-          .catch(error => alert('Error creating issue: ' + error.response?.data?.error || error.message));
+          .catch(error => alert('Error saving issue: ' + error.response?.data?.error || error.message));
       };
 
       return (
@@ -121,110 +135,28 @@
                 >
                   Raise Issue
                 </button>
-                {!isLoggedIn ? (
-                  <button
-                    onClick={handleLogin}
-                    className="bg-white text-blue-600 px-4 py-2 rounded"
-                  >
-                    Login with GitHub
-                  </button>
-                ) : (
-                  <span className="px-4 py-2">Logged In</span>
-                )}
+                <button
+                  onClick={handleRefresh}
+                  className="bg-white text-blue-600 px-4 py-2 rounded"
+                >
+                  Refresh Data
+                </button>
               </div>
             </div>
           </nav>
           <div className="container mx-auto p-4">
             {viewMode === 'search' && (
               <div>
-                <input
-                  type="text"
-                  placeholder="Search by resource type, ID, or profile..."
-                  value={searchTerm}
-                  onChange={e => setSearchTerm(e.target.value)}
-                  className="w-full p-2 mb-4 border rounded"
-                />
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <h2 className="text-lg font-semibold mb-2">Resources</h2>
-                    <ul className="border rounded bg-white">
-                      {filteredResources.map(resource => (
-                        <li
-                          key={resource.id}
-                          onClick={() => setSelectedResource(resource)}
-                          className="p-2 hover:bg-gray-200 cursor-pointer"
-                        >
-                          {resource.resourceType} - {resource.id}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div>
-                    {selectedResource && (
-                      <div className="border rounded p-4 bg-white">
-                        <h2 className="text-lg font-semibold mb-2">Resource Details</h2>
-                        <pre className="bg-gray-100 p-2 rounded overflow-auto max-h-[600px]">
-                          {JSON.stringify(selectedResource, null, 2)}
-                        </pre>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-            {viewMode === 'contribute' && (
-              <div className="border rounded p-4 bg-white">
-                <h2 className="text-lg font-semibold mb-2">Contribute Test Data</h2>
-                <textarea
-                  value={contributionData}
-                  onChange={e => setContributionData(e.target.value)}
-                  placeholder='Paste FHIR JSON here (e.g., { "resourceType": "Patient", "id": "example" })'
-                  className="w-full h-64 p-2 border rounded mb-4 font-mono"
-                />
-                <button
-                  onClick={handleContribute}
-                  className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-                >
-                  Submit Contribution
-                </button>
-              </div>
-            )}
-            {viewMode === 'issue' && (
-              <div className="border rounded p-4 bg-white">
-                <h2 className="text-lg font-semibold mb-2">Raise an Issue</h2>
-                <input
-                  type="text"
-                  placeholder="Issue Title"
-                  value={issueData.title}
-                  onChange={e => setIssueData({ ...issueData, title: e.target.value })}
-                  className="w-full p-2 mb-4 border rounded"
-                />
-                <textarea
-                  placeholder="Description"
-                  value={issueData.description}
-                  onChange={e => setIssueData({ ...issueData, description: e.target.value })}
-                  className="w-full p-2 mb-4 border rounded h-32"
-                />
-                <textarea
-                  placeholder="Steps to Reproduce (optional)"
-                  value={issueData.steps}
-                  onChange={e => setIssueData({ ...issueData, steps: e.target.value })}
-                  className="w-full p-2 mb-4 border rounded h-32"
-                />
-                <button
-                  onClick={handleSubmitIssue}
-                  className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-                >
-                  Submit Issue
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      );
-    };
-
-    ReactDOM.render(<App />, document.getElementById('root'));
-  </script>
-</body>
-</html>
+                <div className="flex justify-between items-center mb-4">
+                  <input
+                    type="text"
+                    placeholder="Search by resource type, ID, profile, or code..."
+                    value={searchTerm}
+                    onChange={e => setSearchTerm(e.target.value)}
+                    className="w-full p-2 border rounded"
+                  />
+                  {lastUpdated && (
+                    <span className="ml-4 text-sm text-gray-600">
+                      Last Updated: {new Date(lastUpdated).toLocaleString()}
+                    </span>
+                  )}
