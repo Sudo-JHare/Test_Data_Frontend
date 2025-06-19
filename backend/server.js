@@ -10,7 +10,7 @@ const port = process.env.PORT || 3000;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
-const REPO_OWNER = 'Sudo-JHare';
+const REPO_OWNER = 'Sudo-JHare'; // Updated to your repository
 const REPO_NAME = 'au-fhir-test-data';
 const REDIRECT_URI = 'http://localhost:3000/api/auth/github/callback';
 
@@ -30,33 +30,57 @@ const validateFhir = (data) => {
 // Fetch FHIR resources from GitHub
 app.get('/api/resources', async (req, res) => {
   try {
+    console.log(`Fetching contents of test-data directory from ${REPO_OWNER}/${REPO_NAME}...`);
     const { data } = await octokit.repos.getContent({
       owner: REPO_OWNER,
       repo: REPO_NAME,
-      path: 'au-fhir-test-data-set',
+      path: 'test-data',
     });
+    console.log('Directory contents:', data);
 
     const resources = [];
+    // Handle both files and directories
     for (const item of data) {
-      if (item.type === 'dir') {
+      if (item.type === 'file' && item.name.endsWith('.json')) {
+        console.log('Fetching file:', item.path);
+        const { data: fileContent } = await octokit.repos.getContent({
+          owner: REPO_OWNER,
+          repo: REPO_NAME,
+          path: item.path,
+        });
+        const content = Buffer.from(fileContent.content, 'base64').toString();
+        try {
+          resources.push(JSON.parse(content));
+        } catch (parseError) {
+          console.error(`Error parsing JSON file ${item.path}:`, parseError);
+        }
+      } else if (item.type === 'dir') {
+        console.log('Processing directory:', item.path);
         const { data: files } = await octokit.repos.getContent({
           owner: REPO_OWNER,
           repo: REPO_NAME,
           path: item.path,
         });
+        console.log(`Files in ${item.path}:`, files);
         for (const file of files) {
           if (file.name.endsWith('.json')) {
+            console.log('Fetching file:', file.path);
             const { data: fileContent } = await octokit.repos.getContent({
               owner: REPO_OWNER,
               repo: REPO_NAME,
               path: file.path,
             });
             const content = Buffer.from(fileContent.content, 'base64').toString();
-            resources.push(JSON.parse(content));
+            try {
+              resources.push(JSON.parse(content));
+            } catch (parseError) {
+              console.error(`Error parsing JSON file ${file.path}:`, parseError);
+            }
           }
         }
       }
     }
+    console.log('Final resources:', resources);
     res.json(resources);
   } catch (error) {
     console.error('Error fetching resources:', error);
@@ -83,7 +107,6 @@ app.get('/api/auth/github/callback', async (req, res) => {
       headers: { Accept: 'application/json' },
     });
     const token = response.data.access_token;
-    // In production, store token securely (e.g., session)
     res.send(`
       <script>
         localStorage.setItem('github_token', '${token}');
@@ -105,7 +128,6 @@ app.post('/api/contribute', async (req, res) => {
   }
 
   try {
-    // Create an issue for tracking
     const issue = await octokit.issues.create({
       owner: REPO_OWNER,
       repo: REPO_NAME,
@@ -113,14 +135,12 @@ app.post('/api/contribute', async (req, res) => {
       body: 'New test data submitted via AU FHIR Search app.',
     });
 
-    // Get the main branch SHA
     const { data: ref } = await octokit.git.getRef({
       owner: REPO_OWNER,
       repo: REPO_NAME,
       ref: 'heads/main',
     });
 
-    // Create a new branch
     const branchName = `issue-${issue.data.number}-${data.resourceType.toLowerCase()}-${data.id.toLowerCase()}`;
     await octokit.git.createRef({
       owner: REPO_OWNER,
@@ -129,17 +149,15 @@ app.post('/api/contribute', async (req, res) => {
       sha: ref.object.sha,
     });
 
-    // Commit the new file
     await octokit.repos.createOrUpdateFileContents({
       owner: REPO_OWNER,
       repo: REPO_NAME,
-      path: `resources/${data.resourceType}/${data.id}.json`,
+      path: `test-data/${data.resourceType}/${data.id}.json`,
       message: `Add ${data.resourceType}/${data.id} for issue #${issue.data.number}`,
       content: Buffer.from(JSON.stringify(data, null, 2)).toString('base64'),
       branch: branchName,
     });
 
-    // Create a pull request
     await octokit.pulls.create({
       owner: REPO_OWNER,
       repo: REPO_NAME,
